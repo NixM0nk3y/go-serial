@@ -25,12 +25,13 @@ import (
 )
 
 type serialPort struct {
-	f  *os.File
-	fd syscall.Handle
-	rl sync.Mutex
-	wl sync.Mutex
-	ro *syscall.Overlapped
-	wo *syscall.Overlapped
+	f        *os.File
+	fd       syscall.Handle
+	rl       sync.Mutex
+	wl       sync.Mutex
+	ro       *syscall.Overlapped
+	wo       *syscall.Overlapped
+	isOpened bool
 }
 
 type structDCB struct {
@@ -98,11 +99,13 @@ func openInternal(options OpenOptions) (Serial, error) {
 	port.fd = h
 	port.ro = ro
 	port.wo = wo
+	port.isOpened = true
 
 	return port, nil
 }
 
 func (p *serialPort) Close() error {
+	p.isOpened = false
 	return p.f.Close()
 }
 
@@ -133,15 +136,24 @@ func (p *serialPort) Read(buf []byte) (int, error) {
 		return 0, err
 	}
 	var done uint32
-	err := syscall.ReadFile(p.fd, buf, &done, p.ro)
-	if err != nil && err != syscall.ERROR_IO_PENDING {
-		return int(done), err
-	}
-	n, err := getOverlappedResult(p.fd, p.ro)
-	if n == 0 && err == nil {
+
+	// On Windows, reading from a closed file descriptor sometimes causes the
+	// read from another opened descriptor, so we need to check explicitly
+	// whether the port has been closed already
+	if p.isOpened {
+		err := syscall.ReadFile(p.fd, buf, &done, p.ro)
+		if err != nil && err != syscall.ERROR_IO_PENDING {
+			return int(done), err
+		}
+		n, err := getOverlappedResult(p.fd, p.ro)
+		if n == 0 && err == nil {
+			return 0, io.EOF
+		}
+		return n, err
+	} else {
+		// The descriptor was already closed, so just return EOF
 		return 0, io.EOF
 	}
-	return n, err
 }
 
 const PURGE_RXCLEAR = 0x8
