@@ -6,6 +6,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 //
@@ -24,6 +26,8 @@ import (
 // }
 //
 const (
+	kTCGETS   = 0x00005401
+	kTCSETS   = 0x00005402
 	kTCGETS2  = 0x802C542A
 	kTCSETS2  = 0x402C542B
 	kCBAUD    = 0x100f
@@ -73,6 +77,39 @@ type serialPort struct {
 	file *os.File
 }
 
+var bauds = map[speed_t]tcflag_t{
+	50:      unix.B50,
+	75:      unix.B75,
+	110:     unix.B110,
+	134:     unix.B134,
+	150:     unix.B150,
+	200:     unix.B200,
+	300:     unix.B300,
+	600:     unix.B600,
+	1200:    unix.B1200,
+	1800:    unix.B1800,
+	2400:    unix.B2400,
+	4800:    unix.B4800,
+	9600:    unix.B9600,
+	19200:   unix.B19200,
+	38400:   unix.B38400,
+	57600:   unix.B57600,
+	115200:  unix.B115200,
+	230400:  unix.B230400,
+	460800:  unix.B460800,
+	500000:  unix.B500000,
+	576000:  unix.B576000,
+	921600:  unix.B921600,
+	1000000: unix.B1000000,
+	1152000: unix.B1152000,
+	1500000: unix.B1500000,
+	2000000: unix.B2000000,
+	2500000: unix.B2500000,
+	3000000: unix.B3000000,
+	3500000: unix.B3500000,
+	4000000: unix.B4000000,
+}
+
 //
 // Returns a pointer to an instantiates termios2 struct, based on the given
 // OpenOptions. Termios2 is a Linux extension which allows arbitrary baud rates
@@ -89,8 +126,11 @@ func makeTermios2(options OpenOptions) (*termios2, error) {
 	ccOpts[syscall.VTIME] = vtime
 	ccOpts[syscall.VMIN] = vmin
 
+	rate, _ := bauds[speed_t(options.BaudRate)]
+
+	//https://github.com/Microsoft/WSL/issues/2595
 	t2 := &termios2{
-		c_cflag:  syscall.CLOCAL | syscall.CREAD | kBOTHER,
+		c_cflag:  syscall.CLOCAL | syscall.CREAD | rate,
 		c_ispeed: speed_t(options.BaudRate),
 		c_ospeed: speed_t(options.BaudRate),
 		c_cc:     ccOpts,
@@ -171,7 +211,7 @@ func openInternal(options OpenOptions) (Serial, error) {
 		return nil, optErr
 	}
 
-	err := ioctlp(uintptr(file.Fd()), kTCSETS2, unsafe.Pointer(t2))
+	err := ioctlp(uintptr(file.Fd()), kTCSETS, unsafe.Pointer(t2))
 	if err != nil {
 		return nil, err
 	}
@@ -228,14 +268,18 @@ func (s *serialPort) Flush() error {
 
 func (s *serialPort) SetBaudRate(baudRate uint) error {
 	var t2 termios2
-	err := ioctlp(uintptr(s.file.Fd()), kTCGETS2, unsafe.Pointer(&t2))
+	err := ioctlp(uintptr(s.file.Fd()), kTCSETS, unsafe.Pointer(&t2))
 	if err != nil {
 		return err
 	}
-	t2.c_cflag = ((t2.c_cflag &^ kCBAUD) | kBOTHER)
+
+	rate, _ := bauds[speed_t(baudRate)]
+
+	//borked
+	t2.c_cflag = (t2.c_cflag &^ rate)
 	t2.c_ispeed = speed_t(baudRate)
 	t2.c_ospeed = speed_t(baudRate)
-	err = ioctlp(uintptr(s.file.Fd()), kTCSETS2, unsafe.Pointer(&t2))
+	err = ioctlp(uintptr(s.file.Fd()), kTCSETS, unsafe.Pointer(&t2))
 	if err != nil {
 		return err
 	}
